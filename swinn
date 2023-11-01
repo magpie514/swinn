@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+#########################################################################################################################################################################
+#	                              _|
+#	  _|_|_|  _|      _|      _|      _|_|_|    _|_|_|
+#	_|_|      _|      _|      _|  _|  _|    _|  _|    _|
+#	    _|_|    _|  _|  _|  _|    _|  _|    _|  _|    _|
+#	_|_|_|        _|      _|      _|  _|    _|  _|    _|
+
+# swinn: An implementation of blezz (https://github.com/Blezzing/blezz) in bash.
+# Swinn means melody (a sequence of notes) in Old English. I wanted to use Melody but that's probably used in a zillion projects.
+
+# TODO List:
+# [v] Handle trying to enter undefined directories.
+# [ ] trim_surrounding_spaces > Remove spaces from the right properly too.
+# [ ] general > command line options to define glyphs, colors and starting dir.
+# [ ] check for tput's existence. If it exists, make a cache of its outputs for color, screen positioning and save/restore screen?
+
+# Setup and initialization ##############################################################################################################################################
+
+# Reset ANSI colors:
+CLX='\033[m'
+# ANSI Colors: Foreground: ${CF[x]} Background: ${CB[x]} Clear: $CLX
+# 00:Black 01:Red 02:Green 03:Yellow 04:Blue 05:Pink 06:Cyan 07:Gray
+# 08:Black 09:Red 10:Green 11:Yellow 12:Blue 13:Pink 14:Cyan 15:Gray
+CF=( '\033[3'{0..7}'m' '\033[9'{0..7}'m'  )
+CB=( '\033[4'{0..7}'m' '\033[10'{0..7}'m' )
+EL='\033[K\n' #Move to end of line.
+
+#exec 1>&2
+
+# Options #####################################################################
+# Glyphs used to draw the interface for each entry type.
+declare -A glyph
+glyph[DIR]=">" #Directories
+glyph[CMD]="~" #Commands
+glyph[BCK]="<" #Back button
+# Colors
+COLOR_FG="15" #White
+COLOR_BG="4"  #Blue
+COLOR_MSG="1" #Red
+###############################################################################
+
+# The lack of nested arrays in Bash forces things to be a bit messy, but can be done.
+declare -A dirs    #This array stores the directories like [dir]:[data]. Data is a field of 4 values separated by tabs (key, label, type (dir/act/back) and command)
+declare -A keys    #This array stores the keys that the displayed directory accepts like [key]:[data]. data is (type,command) separated by tabs.
+declare -a hist    #History. A fairly rough stack where opened dirs are stored, so the "back" action works properly.
+current_dir=""     #Current dir.
+msgline_pos=""     #Message line position.
+headertext=""      #Extra header text.
+
+trap _exit SIGINT SIGHUP SIGTERM EXIT
+
+# Helper functions ######################################################################################################################################################
+
+function get_cursorpos { #Get current cursor position on the screen, to return to it later.
+	local pos;
+	read -rsdR -p $'\E[6n' pos && pos="${pos#*[}"
+	echo -n "$pos"
+}
+
+function print_hier { #Print current directory hierarchy.
+	local out=""
+	local n=${#hist[@]}
+	local sep=""
+	for (( i = n-1; i >= 0; i-- )); do
+		out="$out$sep${hist[i]}"
+		sep="${glyph[DIR]}"
+	done
+	echo "$out"
+}
+
+function fancy_header { #Draw the header (dir)
+	local C="${CF[$COLOR_FG]}${CB[$COLOR_BG]}"; local I="${CF[$COLOR_BG]}${CB[$COLOR_FG]}" #Drawing color and inverted color.
+	local H; H="$(print_hier)"
+	printf "$I%*s$EL" "$(( (${#1} + ${#H} + ${COLUMNS:-80}) / 2))" "$H/$1" #Center the dir name.
+	[[ -n ${headertext// /} ]] && {
+		printf "${C}%.${COLUMNS:-80}s$EL" "$headertext"
+	}
+}
+
+function fancy_line { #Draw the contents.
+	local C="${CF[$COLOR_FG]}${CB[$COLOR_BG]}"; local I="${CF[$COLOR_BG]}${CB[$COLOR_FG]}"
+	echo -ne "$I$1 [$2] $C $3 $EL$CLX"
+}
+
+function msgline_print { #Move cursor to last (message) line and print string.
+	local C="${CF[$COLOR_MSG]}${CB[8]}";
+	printf "%b" "\033[${msgline_pos}H"
+	printf "%b" "$C $1 $EL$CLX"
+}
+
+function is_dir_declaration { #Check if current line defines a directory.
+	[[ $1 =~ :$ ]] && return 0
+	return 1
+}
+
+function is_act_ref { #Check if current line is an action.
+	[[ $1 =~ act([[:space:]]*.+,[[:space:]]*.+) ]] && return 0
+	return 1
+}
+
+function is_dir_ref { #Check if current line is a directory open action.
+	[[ $1 =~ dir(.+) ]] && return 0
+	return 1
+}
+
+function trim_surrounding_spaces { #Remove potential spaces around the elements.
+	local out="${1#"${1%%[![:space:]]*}"}"
+	#out="${out%"${out##*[![:space]]}"}" #TODO: Remove spaces from the right properly too.
+	echo "$out"
+}
+
+function parse_act { #Parse an action definition.
+	[[ $1 =~ act\((.),(.[^,]*),(.*)\) ]] && { #Get [key,label,command]. (Commas negated because can't /.*?/ for non-greedy match)
+		local A;A="${BASH_REMATCH[1]}"; local B;B=$(trim_surrounding_spaces "${BASH_REMATCH[2]}"); local C;C=$(trim_surrounding_spaces "${BASH_REMATCH[3]}")
+		echo -ne "$A\t$B\tCMD\t$C" #Format is key, label, type (CMD), command]
+	}
+}
+
+function parse_dir { #Parse a directory open action.
+	[[ $1 =~ dir\((.),(.*)\) ]] && { #Get [key,label].
+		local A; A="${BASH_REMATCH[1]}"; local B; B=$(trim_surrounding_spaces "${BASH_REMATCH[2]}")
+		echo -ne "$A\t$B\tDIR\t$B" #Format is [key, label, type (CMD), command], but label is == command.
+	}
+}
+
+function clear_keys { #Clear content of keys array. Done this way because unsetting keys in a function and remaking it will make it non-global.
+	for i in "${!keys[@]}"; do
+		unset "keys[$i]"
+	done
+}
+
+# Main functions ########################################################################################################################################################
+
+function load_blezz { #Load blezz config. Should conform to spec for blezz, doesn't take rofi-blezz actReloads into account (yet?)
+	[[ -f $1 ]] && {
+		local current_dir=""
+		while read -r i; do
+			[[ $i =~ ^[[:space:]]*# ]] && continue #Ignore commented lines
+			is_dir_declaration "$i" && { #Directory declaration. Once set, we switch to it, then load any following actions in the current one.
+				local dirname=${i%:}
+				current_dir=$dirname
+				dirs[${i%:}]="" #Empty list for this dir now.
+			}
+			is_act_ref "$i" && { #Action declaration. Added to current dir, if any is set.
+				[[ -n $current_dir ]] && {
+					IFS= printf -v dirs["$current_dir"] "%s\n" "${dirs[$current_dir]}$(parse_act "$i")"
+				}
+			}
+			is_dir_ref "$i" && { #Change dir action declaration. Same as regular actions.
+				[[ -n $current_dir ]] && {
+					IFS= printf -v dirs["$current_dir"] "%s\n" "${dirs[$current_dir]}$(parse_dir "$i")"
+				}
+			}
+		done < "$1"
+	}
+}
+
+function show_dir { #Switch to, and display, all commands in this directory.
+	clear
+	local dir="${1:-Main}"
+	[[ -v dirs[$dir] ]] && {
+		current_dir="$dir"
+		fancy_header "$dir"
+		clear_keys
+		local dir_content="${dirs[$dir]}" #Load contents of this dir.
+		while read -r line; do
+			[[ -n $line ]] && {
+				IFS=$'\t'
+				read -ra A <<< "$line"
+				local key="${A[0]}"; local label="${A[1]}"; local type="${A[2]}"; local command="${A[3]}"
+				printf -v "keys[$key]" "%s\t%s" "$type" "$command" #Store key data so it can be accessed by using bash associative arrays with the input as key.
+				fancy_line "${glyph[${type}]}" "$key" "$label"
+				unset A
+			}
+		done <<< "$dir_content"
+		printf -v keys[.] "BCK\tMain"         #Add back button to keys list as a special, always-there case.
+		fancy_line "${glyph[BCK]}" "." "Back" #Finish drawing the back button (Default:[.])
+		msgline_pos="$(get_cursorpos)"        #Store current cursor position (should be below "Back")
+	}
+}
+
+function act_back {
+	[[ $current_dir == Main ]] && exit 0
+	local last="${hist[0]}" #"Pop" leftmost element.
+	hist=( "${hist[@]:1}" ) #Make hist a copy of hist without the leftmost element.
+	show_dir "$last"
+}
+
+function get_input { #Process input.
+	IFS= read -srN 1 _KEY #Read a single character. This is a simplistic hack and might or might not be non-portable, but seems to work in the terminals I tried it into.
+	if [[ -v keys[$_KEY] ]]; then { #Check if key exists in this directory.
+		local cmd="${keys[$_KEY]}"
+		IFS=$'\t'
+		read -ra A <<< "${cmd}" #Separate action type and command.
+		case "${A[0]}" in #Check action type.
+			CMD) #Action command.
+				printf '\033[?47l' # restore screen
+				local runcmd="${A[1]/'{}'/$headertext}" #Replace {} placeholder for input text.
+				setsid bash -c "$runcmd" &              #Run command as background process. setsid is used so it's detached from swinn.
+				exit 0 #TODO: Add a mode where it doesn't exit after an action.
+			;;
+			DIR) #Open dir command.
+				if [[ -v dirs[${A[1]}] ]]; then         #Make sure directory exists first.
+					hist=( "$current_dir" "${hist[@]}" ) #Store new elements at the left side of the hist array.
+					show_dir "${A[1]}"
+				else
+					msgline_print "ERR:Directory ${A[1]} undefined"
+				fi
+			;;
+			BCK) act_back ;; #Go back.
+			*) echo "ERR:(${A[0]})" > /dev/stderr;; #Unknown type, panic.
+		esac
+	}
+	else #Key not found.
+		msgline_print "ERR: Key $_KEY not found"
+	fi
+}
+
+function main {
+	printf '\033[?47h' && clear # Save screen contents, then clear screen.
+	[[ -z $1 ]] && { echo "No blezz config specified. Exiting."; exit 1; }
+
+	load_blezz "$1" #Now load config.
+	headertext="${2:- }"
+	show_dir "${3:-Main}" #Load dir if specified, if not default to Main.
+	while :; do
+		get_input
+	done
+}
+
+function _exit { #Clean up and restore screen buffer.
+	printf '\033[?47l' # restore screen
+	#Clean up globals to avoid polluting env.
+	unset dirs keys hist glyph CLX CF CB EL
+	unset current_dir msgline_pos COLOR_BG COLOR_FG
+	exit
+}
+
+main "$@"
