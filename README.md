@@ -9,13 +9,21 @@ I started using Blezz files to define launchers and I find it very convenient, s
 
 ## Syntax
 `directoryName:`
+
 Defines the contents of a directory. It's similar to a "goto" label. Anything before a label will be top level.
+
 `dir(key, dirName)`
+
 When pressing `key` it'll open the defined directory.
+
 `act(key, label, action)`
+
 When pressing `key` it'll start the defined action. Use sh-compatible syntax.
+
 `# Comment`
+
 Lines starting with a # will be commented out.
+
 ### Keys
 Any key you can type on your keyboard should work for the value of `key`, I've tested it with non-US characters, capitals and such without issue.
 ```
