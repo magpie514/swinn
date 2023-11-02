@@ -38,4 +38,4 @@ Will let you press "2" to launch firefox, and "1, 1" to open libreoffice.
 
 
 ## Keys
-`.` to go back to a previous folder, or close the application if at top level. You may also quit with Ctrl+C. Any assigned key will perform its given action, and non-assigned keys should show an alert.
+`.` to go back to a previous folder, or close the application if at top level. You may also quit with Escape and Ctrl+C. Any assigned key will perform its given action, and non-assigned keys should show an alert.
