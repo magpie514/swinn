@@ -213,7 +213,11 @@ function get_input { #Process input.
 		esac
 	}
 	else #Key not found.
-		msgline_print "ERR: Key $_KEY not found"
+		if [[ $_KEY == $'\e' ]]; then #Handle Escape key to quit.
+			exit 0
+		else
+			msgline_print "ERR: Key $_KEY not found"
+		fi
 	fi
 }
 
