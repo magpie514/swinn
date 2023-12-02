@@ -5,14 +5,14 @@
 #	_|_|      _|      _|      _|  _|  _|    _|  _|    _|
 #	    _|_|    _|  _|  _|  _|    _|  _|    _|  _|    _|
 #	_|_|_|        _|      _|      _|  _|    _|  _|    _|
-
+#########################################################################################################################################################################
 # swinn: An implementation of blezz (https://github.com/Blezzing/blezz) in bash.
 # Swinn means melody (a sequence of notes) in Old English. I wanted to use Melody but that's probably used in a zillion projects.
 
 # TODO List:
 # [v] Handle trying to enter undefined directories.
+# [v] general > command line options to define glyphs, colors and starting dir.
 # [ ] trim_surrounding_spaces > Remove spaces from the right properly too.
-# [ ] general > command line options to define glyphs, colors and starting dir.
 # [ ] check for tput's existence. If it exists, make a cache of its outputs for color, screen positioning and save/restore screen?
 
 # Setup and initialization ##############################################################################################################################################
@@ -30,14 +30,17 @@ EL='\033[K\n' #Move to end of line.
 
 # Options #####################################################################
 # Glyphs used to draw the interface for each entry type.
+# Set SWINN_OPTS with the following format: <DIR glyph><CMD glyph><BACK glyph><Foreground color><Background color><Message color>
+# Colors are set as a single hex value 0..F
+_options="${SWINN_OPTS:->~<F41}"
 declare -A glyph
-glyph[DIR]=">" #Directories
-glyph[CMD]="~" #Commands
-glyph[BCK]="<" #Back button
+glyph[DIR]="${_options:0:1}" #Directories
+glyph[CMD]="${_options:1:1}" #Commands
+glyph[BCK]="${_options:2:1}" #Back button
 # Colors
-COLOR_FG="15" #White
-COLOR_BG="4"  #Blue
-COLOR_MSG="1" #Red
+printf -v COLOR_FG  "%d" "0x${_options:3:1}" #0x so it becomes a valid hex value
+printf -v COLOR_BG  "%d" "0x${_options:4:1}"
+printf -v COLOR_MSG "%d" "0x${_options:5:1}"
 ###############################################################################
 
 # The lack of nested arrays in Bash forces things to be a bit messy, but can be done.
@@ -166,9 +169,10 @@ function show_dir { #Switch to, and display, all commands in this directory.
 		local dir_content="${dirs[$dir]}" #Load contents of this dir.
 		while read -r line; do
 			[[ -n $line ]] && {
+				local key label type command
 				IFS=$'\t'
 				read -ra A <<< "$line"
-				local key="${A[0]}"; local label="${A[1]}"; local type="${A[2]}"; local command="${A[3]}"
+				key="${A[0]}"; label="${A[1]}"; type="${A[2]}"; command="${A[3]}"
 				printf -v "keys[$key]" "%s\t%s" "$type" "$command" #Store key data so it can be accessed by using bash associative arrays with the input as key.
 				fancy_line "${glyph[${type}]}" "$key" "$label"
 				unset A
@@ -222,12 +226,12 @@ function get_input { #Process input.
 }
 
 function main {
-	printf '\033[?47h' && clear # Save screen contents, then clear screen.
+	printf '\033[?47h' && clear    # Save screen contents, then clear screen.
+	printf "\033]0;%s\007" "Swinn" # Set terminal title
 	[[ -z $1 ]] && { echo "No blezz config specified. Exiting."; exit 1; }
-
-	load_blezz "$1" #Now load config.
-	headertext="${2:- }"
-	show_dir "${3:-Main}" #Load dir if specified, if not default to Main.
+	load_blezz "$1"       #Now load config.
+	headertext="${3:- }"  #Set header
+	show_dir "${2:-Main}" #Load dir if specified, if not default to Main.
 	while :; do
 		get_input
 	done
@@ -237,7 +241,7 @@ function _exit { #Clean up and restore screen buffer.
 	printf '\033[?47l' # restore screen
 	#Clean up globals to avoid polluting env.
 	unset dirs keys hist glyph CLX CF CB EL
-	unset current_dir msgline_pos COLOR_BG COLOR_FG
+	unset current_dir msgline_pos COLOR_BG COLOR_FG COLOR_MSG _options
 	exit
 }
 
