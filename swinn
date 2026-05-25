@@ -26,7 +26,8 @@ CF=( '\033[3'{0..7}'m' '\033[9'{0..7}'m'  )
 CB=( '\033[4'{0..7}'m' '\033[10'{0..7}'m' )
 EL='\033[K\n' #Move to end of line.
 
-#exec 1>&2
+exec 5>&1 #Save file descriptor.
+exec 1>/dev/tty #Output everything to TTY until a program is launched.
 
 # Options #####################################################################
 # Glyphs used to draw the interface for each entry type.
@@ -201,8 +202,10 @@ function get_input { #Process input.
 			CMD) #Action command.
 				printf '\033[?47l' # restore screen
 				local runcmd="${A[1]/'{}'/$headertext}" #Replace {} placeholder for input text.
-				setsid bash -c "$runcmd" &              #Run command as background process. setsid is used so it's detached from swinn.
-				exit 0 #TODO: Add a mode where it doesn't exit after an action.
+				### setsid --fork -- sh -c "LC_ALL=${LC_ALL:-en_US.UTF-8} $runcmd" &              #Run command as background process. setsid is used so it is detached from swinn.
+				#exec 1>&5 #Restore redirection so stdout can be captured in vars.
+				sh -c "LC_ALL=${LC_ALL:-en_US.UTF-8} $runcmd" >&5
+				exit 0 #TODO: Add a mode where it does not exit after an action.
 			;;
 			DIR) #Open dir command.
 				if [[ -v dirs[${A[1]}] ]]; then         #Make sure directory exists first.
@@ -238,7 +241,7 @@ function main {
 }
 
 function _exit { #Clean up and restore screen buffer.
-	printf '\033[?47l' # restore screen
+	#printf '\033[?47l' # restore screen
 	#Clean up globals to avoid polluting env.
 	unset dirs keys hist glyph CLX CF CB EL
 	unset current_dir msgline_pos COLOR_BG COLOR_FG COLOR_MSG _options
